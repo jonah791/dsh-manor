@@ -1,6 +1,40 @@
+<!--
+  DSH 插件生态公约声明（plugin-ecosystem-convention · 组合优先/声明清晰/兼容优先）
+  purpose: 庄园门面：找成员（谁在·她是谁·怎么起）、派活（自动合规信封含 meta.taskId）、唤醒（adapter 模式·凭据键从 profile 推导）、成员册（登记层 + 管理面：members/hire/retire/assign）
+  inject: ['tools']
+  tools: manor_find,manor_dispatch,manor_claim,manor_release,manor_holds,manor_wake,manor_members,manor_hire,manor_retire,manor_assign,manor_patrol,manor_tasks,manor_reap,manor_dispute,manor_task_watch,manor_stranded
+  runtime: host-only
+  envDeps: 见 README「配置」节
+  boundary: 见 README「设计要点」与「生效判据与回退」节
+  compat: cordis ^4.0.1 / dsh-tools >=0.1.0-rc.6
+-->
 # manor · 庄园门面
 
+<p align="center">
+  <a href="https://github.com/jonah791/manor"><img src="https://img.shields.io/badge/version-0.2.0-blue" alt="version"></a>
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="license">
+  <img src="https://img.shields.io/badge/TypeScript-3178C6" alt="TypeScript">
+  <img src="https://img.shields.io/badge/tests-3%20passed-brightgreen" alt="tests">
+</p>
+
 > 「找她们」·「把话发对」·「**管住她们是谁**」。
+
+## 快速开始
+
+**1) 装依赖**（在目标 profile 的 `package.json` 加 link 依赖）：
+
+```jsonc
+"manor": "link:E:/alice/self-plugins/manor"
+```
+
+**2) 挂组合**：
+
+```yaml
+- id: manor
+  name: manor
+```
+
+**3) 30 秒验证**：`manor_find` → 应列出庄园成员（谁在 · 她是谁 · 该怎么起她）
 
 ## 为什么存在（两次真实失败，2026-10-09）
 
@@ -114,3 +148,8 @@
 5. **`manor_wake` 的真源是登记册**（2026-10-11 修）：此前只读心跳 ⇒ **从未上线过的成员永远唤不醒**
    （没有心跳文件就推导不出她的 profile/workdir）——而「招募了却起不来」恰恰是名册要解决的场景。
    现顺序为「登记册 → 心跳回退 → 报错」，两处都没有时提示 `manor_hire`。
+
+## 相关文档
+
+- ⚠ **本插件暂无 `semantic.md`**（未建语义文档）——契约以 README 各节与源码为准；补文档是待办。
+- 中心仓：[alice-digital-life](https://github.com/jonah791/alice-digital-life)
