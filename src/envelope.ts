@@ -96,6 +96,58 @@ export function normalizeVia(v: unknown): string | null {
 }
 
 /**
+ * ★ **接力起点**（`best`）—— 论文迁移（arXiv:2610.20563 *Scaling Discovery Requires Forgetting*）。
+ *
+ * ★ 与 `refs` 的分工（**这是两个不同的东西，别合并**）：
+ *   · `refs` 是**过去的锚** —— 「我那句结论凭什么」（证据指针 · 澄定的 `R17'`）；
+ *   · `best` 是**未来的起点** —— 「现在做到哪了、凭什么说它最好」。
+ *   论文的 forgetting 之所以有效，正是因为重启时**只带后者**：丢弃 session 与搜索状态、
+ *   只留 best candidate ⇒ 新 agent 不再被「早期失败尝试的方向」条件化。
+ *   ⚠ 只有 `refs` 而没有 `best` 时，接力的成员会**知道证据在哪、却不知道当前最好的是什么**
+ *     —— 于是从零试错一遍，把上一轮的锚定原样继承过来（论文实测：继承失败史的 agent
+ *     解出的任务**远少于**干净起步的，Tan et al. 2025 Recovery-Bench）。
+ *
+ * ⚠ 与 `refs` / `nature` / `timeout` / `via` **同纪律：空不写**（「没写」= 派活方没给起点，
+ *   比「写了空对象」干净）。⚠ `at` 是**必需**的：没有「在哪」就没有起点可言 ⇒ 整条丢弃
+ *   （fail-closed，不写半截 —— 一个只有 `score` 没有 `at` 的 `best` 是**读不出用途的装饰**）。
+ */
+export const BEST_MAX_LEN = 512
+
+/** `score` 的上限（它是个短标签，不是自由文本）。 */
+export const BEST_SCORE_MAX_LEN = 64
+
+/**
+ * 归一后的接力起点形状（`normalizeBest` 的返回类型）。
+ * 独立成类型是因为它有**第二个消费者**：`HoldRecord.best`（hold 是信封的第二条产出路，
+ * 记录会被读回 ⇒ 类型必须与归一结果同形，不许各写一份 —— 契约漂移的经典形状）。
+ */
+export type BestSpec = { at: string; judge?: string; score?: string }
+
+/**
+ * 归一一条接力起点。**纯函数**（不读盘）—— 只判「它写得对不对」。
+ *
+ * 形态：`{at, judge?, score?}` —— `at` 非空才成立；`judge`/`score` 非空才写。
+ * ⚠ 类型取宽（`unknown`）+ 运行期归一：信封有两条产出路，其中一条从**磁盘 JSON** 读回，
+ *   类型不可信（同 `checkRefs(refs: unknown, …)` 的先例）。
+ * @param v - 任意输入
+ * @returns 归一后的起点；`at` 缺失/为空 ⇒ `null`（**不猜、不救**）
+ */
+export function normalizeBest(v: unknown): { at: string; judge?: string; score?: string } | null {
+  if (typeof v !== 'object' || v === null) return null
+  const rec = v as Record<string, unknown>
+  const atRaw = typeof rec.at === 'string' ? rec.at.trim() : ''
+  if (atRaw === '') return null
+  const out: { at: string; judge?: string; score?: string } = {
+    at: atRaw.length > BEST_MAX_LEN ? atRaw.slice(0, BEST_MAX_LEN) : atRaw,
+  }
+  const judge = typeof rec.judge === 'string' ? rec.judge.trim() : ''
+  if (judge !== '') out.judge = judge.length > BEST_MAX_LEN ? judge.slice(0, BEST_MAX_LEN) : judge
+  const score = typeof rec.score === 'string' ? rec.score.trim() : ''
+  if (score !== '') out.score = score.length > BEST_SCORE_MAX_LEN ? score.slice(0, BEST_SCORE_MAX_LEN) : score
+  return out
+}
+
+/**
  * 来路分类（**消费侧的唯一入口**）：`known` / `unknown` / `none`。
  *
  * ⚠ 三态**不可合并**（同「空必须分型」纪律）：
@@ -162,6 +214,13 @@ export function buildEnvelope(i: {
    *   「这条路的代码还没盖章」，比「写了空串」干净。
    */
   via?: string
+  /**
+   * ★ **接力起点**（见 `normalizeBest` 头注）：当前最优产物 + 判据 + 分数。**可选**：非空才写。
+   *
+   * ⚠ 与 `refs` **不是一回事**：`refs` 答「结论凭什么」（过去的锚），`best` 答「现在做到哪了」
+   *   （未来的起点）。接力型任务（后一轮接着前一轮做）应当带上它；独立型任务不需要。
+   */
+  best?: unknown
 }): Record<string, unknown> {
   const meta: Record<string, unknown> = { taskId: i.taskId, acceptance: i.acceptance, cwd: i.cwd }
   if (Array.isArray(i.refs) && i.refs.length > 0) meta.refs = i.refs
@@ -176,6 +235,12 @@ export function buildEnvelope(i: {
   //     而归一会把「我不认识的那条路」这个最该看见的信号抹成缺省值。
   const via = normalizeVia(i.via)
   if (via !== null) meta.via = via
+  // ★ `best`（2026-10-17 · 论文迁移 arXiv:2610.20563）：非空才写（同 `refs`/`nature`/`timeout`/`via` 纪律）。
+  //   ⚠ 归一在 `normalizeBest`：`at` 缺失/为空 ⇒ null ⇒ **整条不写**（不写半截 —— 一个只有
+  //     `score` 没有 `at` 的 `best` 读不出用途）。两条产出路都必须带上它，否则就是
+  //     `nature` 那个教训的第三个实例（hold 释放时丢声明 ⇒ 那条活按节点缺省跑）。
+  const best = normalizeBest(i.best)
+  if (best !== null) meta.best = best
   return {
     v: 1,
     id: i.id,

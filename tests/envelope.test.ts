@@ -14,7 +14,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-import { buildEnvelope, checkRefs, parseRef, KNOWN_ENVELOPE_VIAS, viaKindOf, VIA_MAX_LEN } from '../src/envelope.ts'
+import { BEST_MAX_LEN, buildEnvelope, checkRefs, parseRef, KNOWN_ENVELOPE_VIAS, viaKindOf, VIA_MAX_LEN } from '../src/envelope.ts'
 
 const base = {
   id: 'm-1', from: 'web-0', to: 'maid-01', kind: 'task', text: '干活',
@@ -145,4 +145,56 @@ test('④g 接线（**源码级**，弱判据）：两条产出路各盖各的�
     false,
     'hold 那侧的章不该出现在 index.ts —— 两条路各盖各的，章的位置本身就是证据',
   )
+})
+
+// ── `best`（接力起点 · 论文迁移 arXiv:2610.20563 · 2026-10-17）──────────────────
+//
+// 这个字段要答的问题：**「上一个做到哪了」**（**未来的起点**）。
+// ⚠ 与 `refs` **不是一回事**，别合并：`refs` 答「结论凭什么」（过去的锚）。
+// 论文的 forgetting 之所以解锁平台期，正因为重启时**只带最优解**、丢弃尝试史
+// （四任务上比并行 agent 高 15%、比单 agent 高 39%，代价只有继续的一半）。
+//
+// 本组尸体（缺一就是假绿）：
+//   · **不传 / 三格全空 ⇒ `meta` 里根本没有这个键**（同 refs 纪律：空不写）；
+//   · **只给 judge/score 而不给 at ⇒ 整条丢弃**（没有「在哪」就没有起点，fail-closed
+//     —— 一个只有 `score` 的 `best` 是**读不出用途的装饰**）；
+//   · **超长必须截断**（不许把整段文本塞进 `meta`）。
+
+test('⑤ 无 best ⇒ meta 里没有这个键（空不写，同 refs 纪律）', () => {
+  const meta = buildEnvelope(base).meta as Record<string, unknown>
+  assert.equal('best' in meta, false, '★ 没给起点 ≠ 给了一个空起点')
+  assert.deepEqual(Object.keys(meta).sort(), ['acceptance', 'cwd', 'taskId'])
+})
+
+test('⑤b 给了 at 才写；judge/score 非空才带上', () => {
+  const two = buildEnvelope({ ...base, best: { at: 'E:/alice/x.ts:12', judge: '3/3 测试绿' } })
+  assert.deepEqual((two.meta as Record<string, unknown>).best, { at: 'E:/alice/x.ts:12', judge: '3/3 测试绿' })
+  const full = buildEnvelope({ ...base, best: { at: 'a.ts:1', judge: 'j', score: 'B+' } })
+  assert.deepEqual((full.meta as Record<string, unknown>).best, { at: 'a.ts:1', judge: 'j', score: 'B+' })
+})
+
+test('⑤c 尸体：只有 judge/score 没有 at ⇒ **整条丢弃**（fail-closed，不写半截）', () => {
+  for (const bad of [{ judge: 'j' }, { score: 'B+' }, { at: '' }, { at: '   ' }, { at: 123 }, 'a.ts:1', null, [], 42]) {
+    assert.equal(
+      'best' in (buildEnvelope({ ...base, best: bad as unknown }).meta as object),
+      false,
+      '没有「在哪」就没有起点：' + JSON.stringify(bad),
+    )
+  }
+})
+
+test('⑤d 归一：两端空白吃掉、超长截断（防把整段文本塞进 meta）', () => {
+  const got = (buildEnvelope({ ...base, best: { at: '  a.ts:1  ' } }).meta as Record<string, unknown>).best as { at: string }
+  assert.equal(got.at, 'a.ts:1', '两端空白要吃掉')
+  const long = buildEnvelope({ ...base, best: { at: 'x'.repeat(900), judge: 'y'.repeat(900) } })
+  const b = (long.meta as Record<string, unknown>).best as { at: string; judge: string }
+  assert.equal(b.at.length, BEST_MAX_LEN, '★ at 超长必须截断')
+  assert.equal(b.judge.length, BEST_MAX_LEN, '★ judge 超长必须截断')
+})
+
+test('⑤e 与 refs 并存：两个不同的东西，各写各的（不许互相顶掉）', () => {
+  const env = buildEnvelope({ ...base, refs: ['a.ts:1'], best: { at: 'b.ts:2' } })
+  const meta = env.meta as Record<string, unknown>
+  assert.deepEqual(meta.refs, ['a.ts:1'], 'refs 是过去的锚')
+  assert.deepEqual(meta.best, { at: 'b.ts:2' }, 'best 是未来的起点')
 })

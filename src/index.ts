@@ -456,6 +456,14 @@ interface DispatchArgs {
    */
   idleMs?: number
   hardCapMs?: number
+  /**
+   * ★ **接力起点**（2026-10-17 · 论文迁移 arXiv:2610.20563）：当前最优产物 + 判据 + 分数。
+   * 参数面**平铺三格**、execute 里组装成 `meta.best` —— 照抄 `timeout` 的成熟形态（零嵌套 schema 风险）。
+   * ⚠ 与 `refs` **不是一回事**：`refs` 是过去的锚（结论凭什么），这三格是**未来的起点**（现在做到哪了）。
+   */
+  bestAt?: string
+  bestJudge?: string
+  bestScore?: string
   dryRun?: boolean
 }
 
@@ -914,6 +922,30 @@ export function apply(ctx: Context, config: Config): void {
           + '写闭集外的值会被**拒发**（不静默回落 —— 回落会让「我声明了」与「我没声明」变成一个读数）。',
       },
       refs: { type: 'array', items: { type: 'string' }, description: '证据指针 `path:line`（可选）。**提成信封一等字段** ⇒ 成员即使上下文被压缩，也能现读复算你引的那一句（R17\'）。⚠ 校验在**派活侧**做（他能读到）；收件人在另一个工作根 ⇒ **不等于她读得到**' },
+      /**
+       * ★ **接力起点**（2026-10-17 · 论文迁移 arXiv:2610.20563 *Scaling Discovery Requires Forgetting*）。
+       *
+       * 参数面**平铺三格**、execute 里组装成 `meta.best` —— 照抄 `timeout`（`idleMs`/`hardCapMs`）
+       * 的成熟形态：**零嵌套 schema 风险**，且每格在工具面自带名字（比一个 object 好填）。
+       */
+      bestAt: {
+        type: 'string',
+        description: '★ **当前最优产物**的指针（`path:line` 或路径）。**接力型任务应当给**：'
+          + '上一个做到哪了。⚠ 与 `refs` **不是一回事** —— `refs` 答「结论凭什么」（过去的锚），'
+          + '本字段答「现在做到哪了」（**未来的起点**）。'
+          + '论文实测：遗忘之所以解锁平台期，正因为重启时**只带最优解**、丢弃尝试史；'
+          + '而只带 `refs` 的接力者会**知道证据在哪、却不知道当前最好的是什么** ⇒ 从零试错一遍。'
+          + '⚠ 三格全空 ⇒ `meta` 里**没有** `best` 键（空不写）；只给 `bestJudge`/`bestScore` '
+          + '而**不给 `bestAt`** ⇒ 整条丢弃（没有「在哪」就没有起点，fail-closed）。',
+      },
+      bestJudge: {
+        type: 'string',
+        description: '凭什么说它是当前最优（判据 / 分数口径 / 验收状态）。可选，非空才写。',
+      },
+      bestScore: {
+        type: 'string',
+        description: '分数或评级（短标签，≤64 字符，如 `3/3 测试绿` / `评 B+`）。可选，非空才写。',
+      },
       cwd: { type: 'string', description: '成员执行时的工作目录（缺省 "."）' },
       kind: { type: 'string', description: 'task | chat（缺省 task）' },
       ttlMs: { type: 'number', description: '存活期 ms（缺省 86400000）' },
@@ -1033,6 +1065,17 @@ export function apply(ctx: Context, config: Config): void {
         const rc = checkRefs(refsRaw, { exists: (p) => existsSync(p) })
         if (!rc.ok) return fail('refs 有问题：' + rc.bad.join('；'))
       }
+      // ★ 接力起点（2026-10-17 · 论文迁移 arXiv:2610.20563）：参数面平铺三格 ⇒ 组装成一个对象，
+      //   归一交给 `normalizeBest`（`at` 缺失/为空 ⇒ **整条不写**，fail-closed —— 不写半截）。
+      //   ⚠ 与 `refs` **不是一回事**：`refs` 是过去的锚（结论凭什么），本字段是未来的起点
+      //     （现在做到哪了）—— 论文的 forgetting 重启时**只带后者**。
+      //   ⚠ 这里**不校验 `at` 指向的路径存在**（与 `refs` 相反）：接力起点可能指向**另一个工作根**
+      //     里的产物，或一条还没落盘的路径 —— 派活侧断言不了，硬校验会拒掉合法的接力。
+      const bestRaw = {
+        at: str(args.bestAt, ''),
+        judge: str(args.bestJudge, ''),
+        score: str(args.bestScore, ''),
+      }
       // 读名册里某收件人的工作根（**读不到返回空串** ⇒ 不替她断言越界）。
       // 与 `manor_wake` 取 workdir 的规则同源：`nodes/<id>.json` 的 `workdir` 字段。
       const workdirOfMember = (id: string): string => {
@@ -1125,6 +1168,10 @@ export function apply(ctx: Context, config: Config): void {
             // ★ 超时预算（2026-10-14）：**声明要跟着活走**（同 `nature` 的教训）——
             //   hold 是信封的第二条产出路，不在这里带上，释放时那条活就丢了预算声明。
             timeout: timeoutSpec,
+            // ★ 接力起点（2026-10-17 · 论文迁移 arXiv:2610.20563）：**声明要跟着活走**
+            //   （同 `nature` / `timeout` 的教训）—— hold 是信封的第二条产出路，
+            //   不在这里带上，释放时那条活就丢了起点 ⇒ 接力者从零试错一遍。
+            best: bestRaw,
             // ★ **显式声明**原因码（2026-10-12 当场抓出）：缺省是 `unknown`，
             //   而这里是**唯一真正知道原因**的那一侧 —— 不传就等于把「我知道」降级成「不知道」。
             //   织那句「闭集还没被任何一个选择点行使过」当场应验：整个系统只有这一处该行使它。
@@ -1214,6 +1261,9 @@ export function apply(ctx: Context, config: Config): void {
           id: eid, from: cfg.selfId, to: one, kind, text, taskId, acceptance,
           refs: refsRaw, cwd, createdAt: nowMs, ttlMs,
           nature: natureRaw,
+          // ★ 接力起点（2026-10-17 · 论文迁移）：与 `timeout` 同路 —— 直投这条产出路必须带上它，
+          //   否则就是 `nature` 那个教训的第三个实例（hold 释放时丢声明）。
+          best: bestRaw,
           // ★ 超时预算（2026-10-14）：直接投递这条产出路 —— 与 hold 释放那条**共用同一个 spec**
           timeout: timeoutSpec,
           // ★ 来路盖章（2026-10-15 · `G-provenance` Step B）：本函数是**第一条**产出路

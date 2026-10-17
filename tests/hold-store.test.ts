@@ -91,8 +91,13 @@ function recOf(over: Partial<HoldRecord> = {}): HoldRecord {
     heldBy: 'LAPTOP-BF4IAPLM-web-0',
     deadlineAfterMs: DEFAULT_HOLD_TIMEOUT_MS,
     ttlMs: 86400000,
+    // ★ 接力起点（2026-10-17 · 论文迁移）：走**生产写入器**（不是 `{...base, ...over}` 手搓）——
+    //   本文件自己的纪律就是「夹具必须与生产共用同一个写入函数」，否则判据的作用域
+    //   又被夹具形状限死（`best` 的归一住在 `buildHoldRecord` 里，手搓就绕过它）。
+    ...(over.best === undefined ? {} : { best: over.best }),
   })
-  return { ...base, ...over }
+  const { best: _best, ...rest } = over
+  return { ...base, ...rest }
 }
 
 /** 记一条 hold（落盘，模拟 `manor_dispatch` 挂起过的那条）。 */
@@ -432,9 +437,54 @@ test('★ 信封契约单一真源：hold 释放的信封与 `buildEnvelope` 逐
       //   （它答的正是「这条 taskId 是被哪条路造出来的」）。
       //   ⚠ 分辨力保留：若 `hold-store` 忘了传，`written` 会缺这一格而 `expected` 有 ⇒ 本测试仍红。
       via: 'hold-release',
+      // ★ 接力起点（2026-10-17 · 论文迁移）：两条产出路的**唯一允许差异是 `via`**，其余逐字同形
+      //   ⇒ 这里也带上（`rec.best` 为 `undefined` 时 `buildEnvelope` 不写该键，对称仍成立）。
+      //   若 `hold-store` 忘了传，`written` 会缺这一格而 `expected` 有 ⇒ 本测试仍红。
+      best: rec.best,
     })
     assert.deepEqual(written, expected)
   } finally { close() }
+})
+
+// ── 五之二 · 接力起点（论文迁移 arXiv:2610.20563 · 2026-10-17）────────────────
+//
+// 它答的问题：**「上一个做到哪了」**（未来的起点）。论文的 forgetting 之所以解锁平台期，
+// 正因为重启时**只带最优解**、丢弃尝试史；而 hold 是信封的**第二条产出路**
+// —— 不在记录里存下来，释放时那条活就丢了起点（同 `nature` / `timeout` 的教训）。
+//
+// 三条判据（缺一就是假绿）：**跟着走** · **空不写** · **归一 fail-closed**。
+
+test('★ 接力起点跟着活走：hold 释放的信封带上 `meta.best`（第二条产出路不许丢它）', () => {
+  const { bus, close } = makeBus()
+  try {
+    const rec = holdRec(bus, { best: { at: 'E:/alice/x.ts:12', judge: '3/3 测试绿' } })
+    const r = releaseHold(bus, rec, '', T0)
+    const written = JSON.parse(readFileSync(join(bus, 'mailbox', 'maid-03', r.envelopeId + '.json'), 'utf8'))
+    assert.deepEqual(
+      written.meta.best,
+      { at: 'E:/alice/x.ts:12', judge: '3/3 测试绿' },
+      '★ 删掉 `releaseHold` 的 `best: hold.best` ⇒ 本测试必红',
+    )
+  } finally { close() }
+})
+
+test('★ 没给起点 ⇒ 信封里没有这个键（空不写，不是写空对象）', () => {
+  const { bus, close } = makeBus()
+  try {
+    const rec = holdRec(bus)
+    const r = releaseHold(bus, rec, '', T0)
+    const written = JSON.parse(readFileSync(join(bus, 'mailbox', 'maid-03', r.envelopeId + '.json'), 'utf8'))
+    assert.equal('best' in written.meta, false, '★ 没给 ≠ 给了空')
+  } finally { close() }
+})
+
+test('★ 归一在 `buildHoldRecord`：只有 judge 没有 at ⇒ 记录里不写 `best`（fail-closed）', () => {
+  // ⚠ 故意绕类型（`as never`）：这条喂的正是**坏样本** —— 归一必须把它整条丢掉，
+  //   而不是写一个只有分数的「装饰」。夹具走**生产写入器**（`recOf` 已改），判的是真实归一。
+  const noAt = recOf({ best: { judge: 'j' } as never })
+  assert.equal('best' in noAt, false, '没有「在哪」就没有起点 —— 不写半截')
+  const withAt = recOf({ best: { at: 'a.ts:1' } as never })
+  assert.deepEqual(withAt.best, { at: 'a.ts:1' })
 })
 
 test('★ 确定性 id 自证来源：hold 释放的信封名以 `m-hold-` 开头（文件名上说清它是谁放的）', () => {

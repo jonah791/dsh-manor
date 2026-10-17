@@ -89,6 +89,9 @@ export const DEFAULT_RELEASE_BATCH = 3
 import type { TaskOutcome } from './task-ledger.ts'
 import type { ReapVerdict } from './reap.ts'
 import { normalizeTimeoutSpec, type TimeoutSpec } from './timeout.ts'
+// ★ 接力起点（2026-10-17 · 论文迁移）：hold 记录要存它 ⇒ 归一与类型都取自 `envelope.ts`
+//   （**单一真源** —— 两处各写一份归一，就会出现「一个字段两种形状」，契约漂移的经典形状）。
+import { normalizeBest, type BestSpec } from './envelope.ts'
 
 /**
  * 依赖活在**可观测世界**里的状态。
@@ -178,6 +181,18 @@ export interface HoldRecord {
    * ⚠ 空（`undefined`）**不写盘**（同 `nature` 空串纪律：记录不该带一个死键）。
    */
   timeout?: TimeoutSpec
+  /**
+   * ★ **接力起点**（2026-10-17 · 论文迁移 arXiv:2610.20563）：当前最优产物 + 判据 + 分数。
+   *
+   * 存在理由：**与 `nature` / `timeout` 同一条路**（`HoldSpec.best` → 本字段 → `releaseHold`
+   *   传回 `buildEnvelope`）—— hold 是信封的**第二条产出路**，不在这里存下来，
+   *   释放时那条活就丢了起点 ⇒ 接力者从零试错一遍（论文实测：继承失败史的 agent 解出的任务
+   *   **远少于**干净起步的）。
+   * ⚠ 与 `refs` **不是一回事**：`refs` 是过去的锚（结论凭什么），本字段是**未来的起点**
+   *   （现在做到哪了）。
+   * ⚠ 空（`undefined`）**不写盘**（同 `nature` / `timeout` 纪律：记录不该带一个死键）。
+   */
+  best?: BestSpec
   cwd: string
   priority: Priority
   /** 等谁（taskId 列表）。指针，非状态 */
@@ -810,6 +825,12 @@ export interface HoldSpec {
    * ⚠ 类型取宽（`unknown`）：hold 记录会被**读回**（磁盘 JSON），类型不可信。
    */
   timeout?: unknown
+  /**
+   * ★ **接力起点**（**可选** · 2026-10-17 · 论文迁移 arXiv:2610.20563）。归一在 `envelope.ts`
+   * 的 `normalizeBest`（**单一真源**）：`at` 缺失/为空 ⇒ `null` ⇒ 本字段**不写**（fail-closed）。
+   * ⚠ 类型取宽（`unknown`）：与 `timeout` 同理 —— hold 记录会被读回，类型不可信。
+   */
+  best?: unknown
   cwd: string
   priority: Priority
   dependsOn: string[]
@@ -848,6 +869,11 @@ export function buildHoldRecord(spec: HoldSpec): HoldRecord {
   //     `natureDeclaredOf` 是那个取严缺省唯一的审计把手）；这个不写 ——
   //     「没写」= 未声明 ⇒ 执行侧回落节点级参数（无审计把手需求）。
   const timeoutSpec = normalizeTimeoutSpec(spec.timeout)
+  // ★ 接力起点（2026-10-17 · 论文迁移）：归一在 `envelope.ts`（**单一真源** —— 两处各写一份，
+  //   就会出现「一个字段两种形状」）。`at` 缺失/为空 ⇒ `null` ⇒ **不写字段**（同 `timeout` 纪律：
+  //   「没写」= 派活方没给起点；与 `nature` 不同 —— 那个归一成 `''` 也要写上，
+  //   因为消费侧要判「声明的还是兜底的」）。
+  const bestSpec = normalizeBest(spec.best)
   return {
     v: HOLD_VERSION,
     taskId: spec.taskId,
@@ -861,6 +887,9 @@ export function buildHoldRecord(spec: HoldSpec): HoldRecord {
     //     本行只保证**形状**，语义归一在 `natureOf`（单一真源，别处不许判）。
     nature: typeof spec.nature === 'string' ? spec.nature : '',
     ...(timeoutSpec === null ? {} : { timeout: timeoutSpec }),
+    // ★ 接力起点（2026-10-17 · 论文迁移）：与 `timeout` **同一条纪律** —— `null`（没给起点）
+    //   ⇒ **不写字段**（记录不该带一个死键）。`bestSpec` 已由 `normalizeBest` 归一。
+    ...(bestSpec === null ? {} : { best: bestSpec }),
     cwd: spec.cwd,
     priority: spec.priority,
     dependsOn: [...spec.dependsOn],
