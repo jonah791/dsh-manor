@@ -110,6 +110,14 @@ export function normalizeVia(v: unknown): string | null {
  * ⚠ 与 `refs` / `nature` / `timeout` / `via` **同纪律：空不写**（「没写」= 派活方没给起点，
  *   比「写了空对象」干净）。⚠ `at` 是**必需**的：没有「在哪」就没有起点可言 ⇒ 整条丢弃
  *   （fail-closed，不写半截 —— 一个只有 `score` 没有 `at` 的 `best` 是**读不出用途的装饰**）。
+ *
+ * ★★ 2026-10-17 第二次迁移（arXiv:2610.20431 *SwarmRSI*）：**补上第四格 `need`**。
+ *   该论文的研究状态是 `s_t = (H_t, P_t, E_t, U_t)` = 假设 + 程序 + 证据 + **未解决的需求**；
+ *   本字段原本只有前三格（`at` ≈ P · `judge`/`score` ≈ E），**缺 U**。
+ *   ⇒ 缺 U 的后果是**结构性的**：论文的 rebase 操作（保留假设、把实现适配到别人的程序底座）
+ *     以「未解决的需求 ↔ 程序机制」的匹配为入口 —— **没有 U，复用无从发生**。
+ *   ⚠ 它同时是论文里 `ψ_f`（未解决需求的**饱和压力**）的唯一来源，而那一项决定
+ *     「下一步该做哪个前沿」—— 即 **U 不只用于找底座，也用于排序**。
  */
 export const BEST_MAX_LEN = 512
 
@@ -120,30 +128,44 @@ export const BEST_SCORE_MAX_LEN = 64
  * 归一后的接力起点形状（`normalizeBest` 的返回类型）。
  * 独立成类型是因为它有**第二个消费者**：`HoldRecord.best`（hold 是信封的第二条产出路，
  * 记录会被读回 ⇒ 类型必须与归一结果同形，不许各写一份 —— 契约漂移的经典形状）。
+ *
+ * ★★ 四格对照（2026-10-17 第二次迁移 · arXiv:2610.20431 *SwarmRSI*）：
+ *   该论文的研究状态是 `s_t = (H_t, P_t, E_t, U_t)` = 假设 + 程序 + 证据 + **未解决的需求**。
+ *   本字段：`at` ≈ P（产物在哪）· `judge`/`score` ≈ E（凭什么说它好）· **`need` = U**。
+ *   ⇒ 缺 `U` 时 **rebase 无从发生**：论文里「复用别人的程序底座」的匹配键**正是**
+ *     「把未解决的需求匹配到程序机制」（matching these needs to program mechanisms）
+ *     —— 即 **只有知道「我还缺什么」，才可能找到「谁那里有」**。
  */
-export type BestSpec = { at: string; judge?: string; score?: string }
+export type BestSpec = { at: string; judge?: string; score?: string; need?: string }
 
 /**
  * 归一一条接力起点。**纯函数**（不读盘）—— 只判「它写得对不对」。
  *
- * 形态：`{at, judge?, score?}` —— `at` 非空才成立；`judge`/`score` 非空才写。
+ * 形态：`{at, judge?, score?, need?}` —— `at` 非空才成立；其余三格非空才写。
  * ⚠ 类型取宽（`unknown`）+ 运行期归一：信封有两条产出路，其中一条从**磁盘 JSON** 读回，
  *   类型不可信（同 `checkRefs(refs: unknown, …)` 的先例）。
  * @param v - 任意输入
  * @returns 归一后的起点；`at` 缺失/为空 ⇒ `null`（**不猜、不救**）
  */
-export function normalizeBest(v: unknown): { at: string; judge?: string; score?: string } | null {
+export function normalizeBest(v: unknown): BestSpec | null {
   if (typeof v !== 'object' || v === null) return null
   const rec = v as Record<string, unknown>
   const atRaw = typeof rec.at === 'string' ? rec.at.trim() : ''
   if (atRaw === '') return null
-  const out: { at: string; judge?: string; score?: string } = {
+  const out: BestSpec = {
     at: atRaw.length > BEST_MAX_LEN ? atRaw.slice(0, BEST_MAX_LEN) : atRaw,
   }
   const judge = typeof rec.judge === 'string' ? rec.judge.trim() : ''
   if (judge !== '') out.judge = judge.length > BEST_MAX_LEN ? judge.slice(0, BEST_MAX_LEN) : judge
   const score = typeof rec.score === 'string' ? rec.score.trim() : ''
   if (score !== '') out.score = score.length > BEST_SCORE_MAX_LEN ? score.slice(0, BEST_SCORE_MAX_LEN) : score
+  // ★ `need`（2026-10-17 · SwarmRSI 迁移）：**未解决的实现需求** —— rebase 的匹配键。
+  //   与 `judge` 同上限（它是句子，不是标签）。非空才写（同纪律）。
+  const need = typeof rec.need === 'string' ? rec.need.trim() : ''
+  // ☠ 尸体注入已验（2026-10-17）：去掉 `need !== ''` 这个空判据 ⇒ **6 条测试红**
+  //   （⑥ / ⑥b 直测本行；⑤b / ⑤e / hold 释放两条因 `{at}` 被写成 `{at, need:''}` 而 deepEqual 失败）
+  //   ⇒ 判据有分辨力，不是恒绿。
+  if (need !== '') out.need = need.length > BEST_MAX_LEN ? need.slice(0, BEST_MAX_LEN) : need
   return out
 }
 

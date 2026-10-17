@@ -198,3 +198,44 @@ test('⑤e 与 refs 并存：两个不同的东西，各写各的（不许互相
   assert.deepEqual(meta.refs, ['a.ts:1'], 'refs 是过去的锚')
   assert.deepEqual(meta.best, { at: 'b.ts:2' }, 'best 是未来的起点')
 })
+
+// ── `best.need`（未解决的需求 · 第二次迁移 arXiv:2610.20431 SwarmRSI · 2026-10-17）──
+//
+// 这一格答的问题：**「还缺什么才能让它成立」**。
+// ★ 它是 **rebase 的匹配键**：论文里「复用别人的程序底座」靠的正是
+//   「把未解决的需求匹配到程序机制」—— **只有知道「我还缺什么」，才可能找到「谁那里有」**。
+//   ⚠ 缺它时，接力者只能**从零试错**（不知道要找什么样的底座）—— 这正是本字段存在的理由。
+//
+// 本组尸体：**非空才写**（同 judge/score 纪律）· **超长截断** · **它不改变 `at` 的必填性**。
+
+test('⑥ need 非空才写；不给就不出现该键（同 judge/score 纪律）', () => {
+  const without = buildEnvelope({ ...base, best: { at: 'a.ts:1' } })
+  assert.deepEqual((without.meta as Record<string, unknown>).best, { at: 'a.ts:1' }, '没给 need 就不该出现该键')
+  const withNeed = buildEnvelope({ ...base, best: { at: 'a.ts:1', need: '缺一个可复现的基线' } })
+  assert.deepEqual(
+    (withNeed.meta as Record<string, unknown>).best,
+    { at: 'a.ts:1', need: '缺一个可复现的基线' },
+  )
+})
+
+test('⑥b 尸体：空串 / 纯空白 ⇒ 不写该键（空不写，不是写空串）', () => {
+  for (const bad of ['', '   ', '\t']) {
+    const env = buildEnvelope({ ...base, best: { at: 'a.ts:1', need: bad } })
+    assert.deepEqual(
+      (env.meta as Record<string, unknown>).best,
+      { at: 'a.ts:1' },
+      '空 need 不得落盘：' + JSON.stringify(bad),
+    )
+  }
+})
+
+test('⑥c need 超长截断；且**只有 need 没有 at 仍整条丢弃**（at 的必填性不因第四格而变）', () => {
+  const long = buildEnvelope({ ...base, best: { at: 'a.ts:1', need: 'z'.repeat(900) } })
+  const b = (long.meta as Record<string, unknown>).best as { need: string }
+  assert.equal(b.need.length, BEST_MAX_LEN, '★ need 超长必须截断')
+  assert.equal(
+    'best' in (buildEnvelope({ ...base, best: { need: '缺基线' } as unknown }).meta as object),
+    false,
+    '★ 四格齐全之前，`at` 仍是唯一必需项 —— 只有 need 没有 at 依然整条丢弃',
+  )
+})

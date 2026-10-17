@@ -457,13 +457,16 @@ interface DispatchArgs {
   idleMs?: number
   hardCapMs?: number
   /**
-   * ★ **接力起点**（2026-10-17 · 论文迁移 arXiv:2610.20563）：当前最优产物 + 判据 + 分数。
-   * 参数面**平铺三格**、execute 里组装成 `meta.best` —— 照抄 `timeout` 的成熟形态（零嵌套 schema 风险）。
-   * ⚠ 与 `refs` **不是一回事**：`refs` 是过去的锚（结论凭什么），这三格是**未来的起点**（现在做到哪了）。
+   * ★ **接力起点**（2026-10-17 · 论文迁移）：当前最优产物 + 判据 + 分数 + **未解决的需求**。
+   * 参数面**平铺四格**、execute 里组装成 `meta.best` —— 照抄 `timeout` 的成熟形态（零嵌套 schema 风险）。
+   * ⚠ 与 `refs` **不是一回事**：`refs` 是过去的锚（结论凭什么），这几格是**未来的起点**（现在做到哪了）。
+   * ★ 第四格 `bestNeed` 来自**第二次迁移**（arXiv:2610.20431 *SwarmRSI*）：它是 rebase 的匹配键
+   *   —— 只有知道「我还缺什么」，才可能找到「谁那里有」。
    */
   bestAt?: string
   bestJudge?: string
   bestScore?: string
+  bestNeed?: string
   dryRun?: boolean
 }
 
@@ -946,6 +949,14 @@ export function apply(ctx: Context, config: Config): void {
         type: 'string',
         description: '分数或评级（短标签，≤64 字符，如 `3/3 测试绿` / `评 B+`）。可选，非空才写。',
       },
+      bestNeed: {
+        type: 'string',
+        description: '★ **未解决的实现需求** —— 「还缺什么才能让它成立」（可选，非空才写）。'
+          + '**这是 rebase 的匹配键**：论文里「复用别人的程序底座」靠的正是'
+          + '「把未解决的需求匹配到程序机制」—— **只有知道「我还缺什么」，才可能找到「谁那里有」**。'
+          + '⚠ 缺这一格时，接力者只能**从零试错**（不知道要找什么样的底座）。'
+          + '它也决定「下一步该做哪个前沿」（论文的 ψ_f：未解决需求的饱和压力）。',
+      },
       cwd: { type: 'string', description: '成员执行时的工作目录（缺省 "."）' },
       kind: { type: 'string', description: 'task | chat（缺省 task）' },
       ttlMs: { type: 'number', description: '存活期 ms（缺省 86400000）' },
@@ -1075,6 +1086,10 @@ export function apply(ctx: Context, config: Config): void {
         at: str(args.bestAt, ''),
         judge: str(args.bestJudge, ''),
         score: str(args.bestScore, ''),
+        // ★ 第四格（2026-10-17 第二次迁移 · arXiv:2610.20431 *SwarmRSI*）：**未解决的需求**。
+        //   论文里 rebase（保留假设、把实现适配到别人的程序底座）的匹配键正是它 ——
+        //   **没有「我还缺什么」，复用就无从发生**（不知道要找什么样的底座）。
+        need: str(args.bestNeed, ''),
       }
       // 读名册里某收件人的工作根（**读不到返回空串** ⇒ 不替她断言越界）。
       // 与 `manor_wake` 取 workdir 的规则同源：`nodes/<id>.json` 的 `workdir` 字段。
