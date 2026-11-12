@@ -689,6 +689,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const findTool: ToolDefinition = defineTool({
     name: 'manor_find',
+    deferLoading: true,
     description:
       '庄园调度名册：一眼看清**谁在、她是谁（名字与职责）、该怎么起她**。'
       + '与 `manor_roster` 的分工：后者做**多源核验的存活判定**（atMs/mtime/pid 三源 + 分歧），本工具做**调度视图**'
@@ -905,6 +906,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const dispatchTool: ToolDefinition = defineTool({
     name: 'manor_dispatch',
+    deferLoading: true,
     description:
       '给庄园成员派活：生成**合规的庄园信封**并写入她的收件箱。'
       + '与 `cluster_send` 的分工：后者写的是通用集群信封（**无 `meta` 字段**），而庄园适配器要求 `meta.taskId`'
@@ -1365,6 +1367,7 @@ export function apply(ctx: Context, config: Config): void {
    */
   const claimTool: ToolDefinition = defineTool({
     name: 'manor_claim',
+    deferLoading: true,
     description:
       '独占领取一件活（③ 竞争面）：**「谁做」靠原子领取，不靠招呼**。'
       + '判据（成员澄）：**独立型 / 读取型 ⇒ 各做各的**（重复成本 < 协调成本，两份独立结论还能互相校对，**不需要领**）；'
@@ -1442,6 +1445,7 @@ export function apply(ctx: Context, config: Config): void {
    */
   const releaseTool: ToolDefinition = defineTool({
     name: 'manor_release',
+    deferLoading: true,
     description:
       '释放自己持有的独占领取（③ 竞争面）。'
       + '★ **只有持有人自己能释放** —— 替别人释放就是夺权（要接管就等 TTL 过期后走 `manor_claim` 的抢占，那条路会留痕）。'
@@ -1484,6 +1488,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const holdsTool: ToolDefinition = defineTool({
     name: 'manor_holds',
+    deferLoading: true,
     description:
       '看**暂不可发起**的活（③ 依赖面）：每条的**依赖项 · 挂起者 · 出口裁决 · 「为什么还没跑」**。'
       + '这是第三格——`可处理`/`无人认领` 都是「**没人拿**」，这一类是「**还没轮到**」。'
@@ -1589,6 +1594,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const wakeTool: ToolDefinition = defineTool({
     name: 'manor_wake',
+    deferLoading: true,
     description:
       '唤醒一个庄园成员：按 **adapter 模式**起她的适配器进程，**凭据键从她的 profile 推导**（不靠人抄文档）。'
       + '与 `node_start` 的分工：后者把 profile 起成**普通 DSH 节点**（`bin.js --profile X`），'
@@ -1840,6 +1846,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const membersTool: ToolDefinition = defineTool({
     name: 'manor_members',
+    deferLoading: true,
     description:
       '**成员册**（庄园的登记层，权威）：我们有哪些成员、各自担什么职责、谁已退役 —— **不看心跳也答得出**。'
       + '与 `manor_find` / `manor_roster` 的分工：那两个答「**此刻谁活着**」（从总线心跳推），本工具答「**我们有哪些人**」（从登记册读）。'
@@ -1947,6 +1954,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const hireTool: ToolDefinition = defineTool({
     name: 'manor_hire',
+    deferLoading: true,
     description:
       '**聘用一名成员**（登记进成员册）。已存在同名 id 即拒绝——不静默覆盖（改名/调职用 `manor_assign`）。'
       + '登记的是**身份**（谁、担什么职责），不含「身体在不在跑」（那是 `manor_wake` 的事）。'
@@ -2018,6 +2026,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const retireTool: ToolDefinition = defineTool({
     name: 'manor_retire',
+    deferLoading: true,
     description:
       '**退役一名成员**：只改状态（`status=retired` + 退役时间 + 原因），**条目保留、可回退**（复职用 `manor_assign {reactivate:true}`）。'
       + '与 `node_retire` 的分工：后者退役的是**节点痕迹**且明确拒绝退役成员；本工具是**成员语义**的退役（保留身份，停止使用）。'
@@ -2073,6 +2082,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const assignTool: ToolDefinition = defineTool({
     name: 'manor_assign',
+    deferLoading: true,
     description:
       '**调职 / 改名 / 复职**：只改给到的字段（**字段级合并**，未给的字段保留），并报出**实际变了哪几项**。'
       + '`reactivate=true` 把已退役成员改回在职并清退役时间/原因。'
@@ -2235,8 +2245,11 @@ export function apply(ctx: Context, config: Config): void {
       const child = spawn(process.execPath, [cfg.spawnDetachedPath, logPath, '--', process.execPath, ...argv], {
         cwd: workdir,
         env: process.env,
+        // detached 是成员进程脱离父进程所必需（父死它要活着）；windowsHide 压住
+        // Windows 上随之而来的控制台窗口。两者同时给是刻意的。
         detached: true,
         stdio: 'ignore',
+        windowsHide: true,
       })
       child.unref()
     } catch (e) {
@@ -2333,6 +2346,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const patrolTool: ToolDefinition = defineTool({
     name: 'manor_patrol',
+    deferLoading: true,
     description:
       '**存活巡检**（庄园语义文档 §5.2）：查出哪些在职成员已经死了，并按纪律处置——'
       + '**有界退避**（连续拉起必须推远下次尝试，防崩溃循环紧转轮烧资源）·'
@@ -2644,6 +2658,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const tasksTool: ToolDefinition = defineTool({
     name: 'manor_tasks',
+    deferLoading: true,
     description:
       '**任务台账**（庄园的作业层）：把动作日志折成「谁派给谁 · 什么状态 · 为什么失败 · 跑了多久」。'
       + '存在理由（2026-10-11 实测）：此前**只有动作日志、没有台账** ⇒ 「派出去的活现在什么状态」要人肉 grep 133 个文件，'
@@ -2750,7 +2765,9 @@ export function apply(ctx: Context, config: Config): void {
         //   而回执面修前**仍把它挂在「最该追的一档」** ⇒ 台账报「未完 0」而回执面报「悬空 1」
         //   —— **两个读数对同一件事给了相反答案**。⇒ 读 `reap/` 并**分开报**（不隐藏）。
         const reaped = readReapedIds(bus)
-        const rs = summarizeReceipts(accMap, receipts.items, reaped.ok ? reaped.ids : undefined)
+        const rs = summarizeReceipts(accMap, receipts.items, reaped.ok ? reaped.ids : undefined,
+          // 无过滤条件时 map 覆盖全史，这一档才有意义；有过滤时必须报「不适用」而不是算数
+          filters.length === 0 ? 'full' : 'filtered')
         receiptLines.push(
           '回执面｜（**域 = 信箱**，与上一段的**动作日志**不同域；两段**不合流**）'
           + '有回执的任务 ' + String(rs.tasksWithReceipt) + ' 个'
@@ -2778,6 +2795,14 @@ export function apply(ctx: Context, config: Config): void {
         if (rs.receiptWithoutAcceptance.length > 0) {
           receiptLines.push(
             '  ℹ 有回执但派活时没写判据 ' + String(rs.receiptWithoutAcceptance.length) + ' 个（**无法对账**，不是缺陷）',
+          )
+        }
+        if (rs.receiptWithoutAcceptanceStatus === 'not-applicable') {
+          // 这一档在**过滤视图**下不成立：被过滤掉的任务其判据必然「查不到」，
+          // 拿它减全历史回执会把「视图没覆盖」算成「没写判据」。
+          receiptLines.push(
+            '  ℹ 有回执但派活时没写判据：**本视图不适用**'
+            + '（判据表是过滤后的视图，覆盖不了全史；去掉过滤条件再看这一档）',
           )
         }
         // ★ 2026-10-15：**把成员自报的未验证项送到派活方眼前**（论文 arXiv:2610.16117v1
@@ -2870,6 +2895,7 @@ export function apply(ctx: Context, config: Config): void {
    */
   const reapTool: ToolDefinition = defineTool({
     name: 'manor_reap',
+    deferLoading: true,
     description:
       '**收尸裁决**：给一条**未完**的活作出决定（判死 / 已被取代），把它从「没人管」变成「有主的决定」。'
       + '为什么需要它：台账报得出「未完 1 个 · 起于 115.6 小时前」，但**没有任何动作能处置它** —— '
@@ -2986,6 +3012,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const disputeTool: ToolDefinition = defineTool({
     name: 'manor_dispute',
+    deferLoading: true,
     description:
       '**争议登记与裁决**（`R16\'`）：给「两个成员对同一件事意见相左」造一个**可被下一次引用**的落点。'
       + '为什么需要它：这事**已经发生过一次** —— 织判「不变量破了」、哨判「宣称 + 判据缺陷」，'
@@ -3444,6 +3471,7 @@ export function apply(ctx: Context, config: Config): void {
 
   const taskWatchTool: ToolDefinition = defineTool({
     name: 'manor_task_watch',
+    deferLoading: true,
     description:
       '**任务失败守望**（⑥ 治理的「追」半环）：只把**新增**的失败/静默失败推出去，不等人来查。'
       + '与 `manor_tasks` 的分工：后者答「现在什么状态」（**拉**），本工具做「新增了要喊一声」（**推**）——'
@@ -3609,6 +3637,7 @@ export function apply(ctx: Context, config: Config): void {
    */
   const strandedBusTool: ToolDefinition = defineTool({
     name: 'manor_stranded',
+    deferLoading: true,
     description:
       '看**总线全域**的搁浅件 —— `manor_find` 只看**成员信箱**，这是它覆盖不到的那一半。'
       + '按**可处置性**分两格：① **箱有消费者**（件会被搭车取走：投递即移出）'

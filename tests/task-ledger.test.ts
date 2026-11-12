@@ -156,8 +156,9 @@ test('★ summarizeReceipts：**空手交**（有回执但 0 条证据）⇒ 单
 test('★ summarizeReceipts：**有回执但没写判据** ⇒ 单列「无法对账」（不是缺陷）', () => {
   const r = summarizeReceipts(new Map([['t-d', '']]), [
     { id: 'm-9', taskId: 't-d', from: 'x', status: 'ok', evidenceCount: 2, evidenceChars: 20, unverifiedCount: 1, createdAtMs: 1 },
-  ])
+  ], undefined, 'full')
   assert.deepEqual(r.receiptWithoutAcceptance, ['t-d'])
+  assert.equal(r.receiptWithoutAcceptanceStatus, 'computed')
   assert.deepEqual(r.acceptanceWithoutReceipt, [])
 })
 
@@ -170,7 +171,7 @@ test('★ summarizeReceipts：同一任务多封回执 ⇒ **按 taskId 去重**
   assert.deepEqual(r.acceptanceWithoutReceipt, [])
 })
 
-test('★★ 已知缺陷快照：acceptanceByTask 是**过滤视图**时 receiptWithoutAcceptance 会跨域相减（修好后本测试必须改断言为 []）', () => {
+test('★★ 已修：acceptanceByTask 是**过滤视图**时不再跨域相减 —— 改报「不适用」（lh-40a3fda0）', () => {
   // 三个任务都有回执；acceptanceByTask 只覆盖 t-1（模拟按 outcome 过滤后的视图）
   const accFiltered = new Map([['t-1', '判据 A']])
   const r = summarizeReceipts(accFiltered, [
@@ -178,16 +179,19 @@ test('★★ 已知缺陷快照：acceptanceByTask 是**过滤视图**时 receip
     { id: 'm-21', taskId: 't-2', from: 'x', status: 'ok', evidenceCount: 1, evidenceChars: 10, unverifiedCount: 0, createdAtMs: 1 },
     { id: 'm-22', taskId: 't-3', from: 'x', status: 'ok', evidenceCount: 1, evidenceChars: 10, unverifiedCount: 0, createdAtMs: 1 },
   ])
-  // ★ 当前行为：t-2/t-3 的 acc === undefined ⇒ 被并进「派活时没写判据」。
-  //   但它们只是**不在过滤视图里** —— 这是跨域相减（2026-10-27 实测：真库上报到 101，真实 0）。
-  assert.deepEqual(r.receiptWithoutAcceptance, ['t-2', 't-3'],
-    '本断言锁定的是**当前缺陷行为**。修法见台账 lh-40a3fda0：覆盖不全时应报「不适用」；修好后此处必须改为 []')
-  // 对照：同一次核对里「判据确实为空」的那条仍要照实报（区分力证明——防修过头把整档关掉）
+  // 修法：t-2/t-3 只是**不在过滤视图里**，不等于「没写判据」。覆盖不全 ⇒ 该档不给数。
+  assert.deepEqual(r.receiptWithoutAcceptance, [],
+    '过滤视图下不再跨域相减（2026-10-27 实测：真库上报 101，真实 0）')
+  assert.equal(r.receiptWithoutAcceptanceStatus, 'not-applicable',
+    '★ 必须**明说「不适用」**，不能只是静默返回空数组 —— 空数组与「真的是 0」长得一样')
+  // 对照：同一次核对里「判据确实为空」的那条在**全史视图**下仍要照实报
+  //（区分力证明——防修过头把整档关掉）
   const realGap = summarizeReceipts(new Map([['t-9', '']]), [
     { id: 'm-23', taskId: 't-9', from: 'x', status: 'ok', evidenceCount: 1, evidenceChars: 10, unverifiedCount: 0, createdAtMs: 1 },
-  ])
+  ], undefined, 'full')
   assert.deepEqual(realGap.receiptWithoutAcceptance, ['t-9'],
     '真缺陷必须照报；若这条也不报了，说明修法过头——整档被关掉与修好长得一样')
+  assert.equal(realGap.receiptWithoutAcceptanceStatus, 'computed')
 })
 
 test('★★ renderLedger：`extraLines` 落在**正文之后**（尾部补充面），且不挤进正文', () => {

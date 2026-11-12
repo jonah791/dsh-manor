@@ -589,6 +589,12 @@ export function summarizeReceipts(
   acceptanceByTask: ReadonlyMap<string, string>,
   receipts: readonly ReceiptLite[],
   reapedTaskIds?: ReadonlySet<string>,
+  /**
+   * `acceptanceByTask` 覆盖的是**全史**还是**过滤视图**。
+   * 默认 `'filtered'` 是故意的保守：说「不适用」最多损失一格读数；
+   * 说一个错的数会让读的人据此做判断（实测真实 0，报成 101）。
+   */
+  acceptanceCoverage: 'full' | 'filtered' = 'filtered',
 ): {
   /** 有回执的任务数（去重后的 taskId 数） */
   tasksWithReceipt: number
@@ -600,6 +606,11 @@ export function summarizeReceipts(
   acceptanceWithoutReceipt: string[]
   /** **有回执但派活时没写判据**的 taskId（第二档：无法对账） */
   receiptWithoutAcceptance: string[]
+  /**
+   * 上面那一档的读数状态。
+   * `'not-applicable'` = 判据表是**过滤视图**，覆盖不了全史 ⇒ **本档不给数**（fail-closed）。
+   */
+  receiptWithoutAcceptanceStatus: 'computed' | 'not-applicable'
   /**
    * ★★ 2026-10-14 新增：**已裁决**（`reap/`）而**判据悬空**的 taskId。
    * ⚠ 为什么要分开报（真调当场抓出）：`t-pwsh-probe-01` 已被裁决 `superseded`，
@@ -647,7 +658,14 @@ export function summarizeReceipts(
     if (reapedTaskIds !== undefined && reapedTaskIds.has(taskId)) acceptanceWithoutReceiptReaped.push(taskId)
     else acceptanceWithoutReceipt.push(taskId)
   }
+  // ★ 2026-11-12 修「跨域相减」：`acceptanceByTask` 可能只是**过滤视图**（调用方按
+  //   member / status / outcome 过滤后再建 map）。拿过滤后的判据表去减全历史的回执，
+  //   被过滤掉的任务其 acc 必然是 undefined ⇒ 它们**全被算成「派活时没写判据」**。
+  //   实测真实 0、报成 101。⇒ 覆盖不全时**该档不给数**，报「不适用」（fail-closed）：
+  //   「不适用」只是少一格读数，而一个错的数会被读的人拿去下判断。
+  const coverageComplete = acceptanceCoverage === 'full'
   for (const taskId of withReceipt) {
+    if (!coverageComplete) break
     const acc = acceptanceByTask.get(taskId)
     if (acc === undefined || acc.trim() === '') receiptWithoutAcceptance.push(taskId)
   }
@@ -658,6 +676,7 @@ export function summarizeReceipts(
     acceptanceWithoutReceipt: acceptanceWithoutReceipt.sort(),
     acceptanceWithoutReceiptReaped: acceptanceWithoutReceiptReaped.sort(),
     receiptWithoutAcceptance: receiptWithoutAcceptance.sort(),
+    receiptWithoutAcceptanceStatus: coverageComplete ? 'computed' : 'not-applicable',
     tasksWithUnverified: [...withUnverified].sort(),
   }
 }
