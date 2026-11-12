@@ -467,6 +467,11 @@ interface DispatchArgs {
   bestJudge?: string
   bestScore?: string
   bestNeed?: string
+  /**
+   * ★ **这条任务在复核谁**（原任务的 `taskId`，`t-` 前缀 · 2026-11-12）。空 = 不是复核任务。
+   * 用途：台账据此算「哪些交付还没人复核」；⚠ 复核者不能是被复核者本人（读侧判、不计入已复核）。
+   */
+  verifyOf?: string
   dryRun?: boolean
 }
 
@@ -982,6 +987,21 @@ export function apply(ctx: Context, config: Config): void {
       priority: { type: 'string', description: 'high | normal | low（缺省 normal）。**有机制效果**：同一轮可释放数超上限时先走高优先级' },
       dependsOn: { type: 'array', items: { type: 'string' }, description: '依赖的 taskId 列表：**全部完成前这条活不会被投递**（进 hold/，由常驻方释放）。依赖必须已存在（账本/信箱/hold 之一），否则拒绝——防静默死锁' },
       holdTimeoutMs: { type: 'number', description: '等多久算超时（缺省配置值，6 小时）。**超时是升级成人看，不是自动放行**' },
+      /**
+       * ⑦ 复核关系（2026-11-12 · 对照 sapper-v2 / nvwabase 的 `verify` 角色补的缺口）
+       * —— 「这条任务在复核谁」。
+       */
+      verifyOf: {
+        type: 'string',
+        description: '★ **这条任务在复核谁**（原任务的 taskId，`t-` 前缀）。**可选**，空 = 不是复核任务。'
+          + '用途：台账据此算出「哪些交付**还没人复核**」—— 回执面只答「有没有交回证据」，'
+          + '答不了「谁复核过它」（工具自己在那一段写着「收到回执 ≠ 判据满足」，'
+          + '需要「另一份**不是作者写的**重建」）。'
+          + '⚠ **复核者不能是被复核者本人**：读侧按「复核任务与目标任务的收件人相同」判为'
+          + '**自我复核** ⇒ 不计入已复核、单独报出（自己验自己不是复核）。'
+          + '⚠ 指向不存在的 taskId ⇒ 孤儿，台账单独报出（不静默丢弃）。'
+          + '⚠ 只答「**有人复核过**」，不答「复核结论是否通过」—— 后者在回执信封里。',
+      },
       dryRun: { type: 'boolean', description: '只回信封不落盘（缺省 false）' },
     },
     output: {
@@ -1093,6 +1113,14 @@ export function apply(ctx: Context, config: Config): void {
         //   **没有「我还缺什么」，复用就无从发生**（不知道要找什么样的底座）。
         need: str(args.bestNeed, ''),
       }
+      // ★ 复核关系（2026-11-12）：`verifyOf` 指向被复核的原任务。
+      //   ⚠ 这里**只拦自指**（一条活复核自己——无意义，且会让读侧无限递归）；
+      //     「复核者 ≠ 被复核者」的判据在**读侧**（`applyReviewIndex` 拿得到全表的 `to`，这里拿不到）
+      //     —— 判据放在**有信息的那一侧**（澄的「位置 → 派活侧」的反面：这条信息只在读侧）。
+      const verifyOfRaw = str(args.verifyOf, '').trim()
+      if (verifyOfRaw !== '' && verifyOfRaw === taskId) {
+        return fail('`verifyOf` 不能指向自己（taskId=' + verifyOfRaw + '）：一条活不能复核自己。')
+      }
       // 读名册里某收件人的工作根（**读不到返回空串** ⇒ 不替她断言越界）。
       // 与 `manor_wake` 取 workdir 的规则同源：`nodes/<id>.json` 的 `workdir` 字段。
       const workdirOfMember = (id: string): string => {
@@ -1189,6 +1217,10 @@ export function apply(ctx: Context, config: Config): void {
             //   （同 `nature` / `timeout` 的教训）—— hold 是信封的第二条产出路，
             //   不在这里带上，释放时那条活就丢了起点 ⇒ 接力者从零试错一遍。
             best: bestRaw,
+            // ★ 复核关系（2026-11-12）：**声明要跟着活走**（同 `nature` / `timeout` / `best` 的教训）
+            //   —— hold 是信封的第二条产出路，不在这里带上，释放时那条复核任务就丢了
+            //   「它在复核谁」⇒ 台账读成普通任务 ⇒ 目标永远显示「未复核」（静默漏判）。
+            verifyOf: verifyOfRaw,
             // ★ **显式声明**原因码（2026-10-12 当场抓出）：缺省是 `unknown`，
             //   而这里是**唯一真正知道原因**的那一侧 —— 不传就等于把「我知道」降级成「不知道」。
             //   织那句「闭集还没被任何一个选择点行使过」当场应验：整个系统只有这一处该行使它。
@@ -1286,6 +1318,10 @@ export function apply(ctx: Context, config: Config): void {
           // ★ 来路盖章（2026-10-15 · `G-provenance` Step B）：本函数是**第一条**产出路
           //   （`manor_dispatch` 直投）。另一条是 `hold-store.releaseHold`。
           via: 'manor_dispatch',
+          // ★ 复核关系（2026-11-12）：直投这条产出路必须带上它。
+          //   ⚠ hold 释放那条路（`hold-store.releaseHold`）**也带** —— 否则就是 `nature` 那个
+          //     教训的第五个实例（一条产出路漏字段 ⇒ 释放出去的活丢了声明，而派活方以为生效了）。
+          verifyOf: verifyOfRaw,
         })
         const body = JSON.stringify(env, null, 2) + '\n'
         sent.push({
@@ -2699,6 +2735,19 @@ export function apply(ctx: Context, config: Config): void {
           failureRatePct: { type: 'number', required: true },
           // ★ 取严缺省的点火率分子（见 `TaskSummary.natureUndeclared`）—— 结构化那一半
           natureUndeclared: { type: 'number', required: true },
+          /**
+           * ★ **复核对账**（2026-11-12）—— 结构化那一半（人读那一半在 `rendered` 的「复核对账」行）。
+           * 用途：答「**哪些交付还没人复核**」—— 回执面只答「有没有交回证据」，答不了这个
+           *   （它自己写着「需要**另一份不是作者写的重建**」）。
+           * ⚠ 六个**恒有值**的数，**不可互相替代**：合并任何一个，都会让某一类盲区从读数里消失
+           *   （自我复核 ≠ 无人复核 · 判不了 ≠ 判过 · 孤儿 ≠ 没派）。
+           */
+          reviewEligible: { type: 'number', required: true },
+          reviewReviewed: { type: 'number', required: true },
+          reviewUnreviewed: { type: 'number', required: true },
+          reviewOrphan: { type: 'number', required: true },
+          reviewSelf: { type: 'number', required: true },
+          reviewUnknownReviewer: { type: 'number', required: true },
           // ★ 「这份读数说的是**哪一刻**」—— 时刻作为**数据**（与渲染行同源同一个值）
           asOfMs: { type: 'number', required: true },
           timeout: { type: 'number', required: true },
@@ -2852,6 +2901,14 @@ export function apply(ctx: Context, config: Config): void {
         warned: s.warned,
         failureRatePct: Number((s.failureRate * 100).toFixed(1)),
         natureUndeclared: s.natureUndeclared,
+        // ★ 复核对账（2026-11-12）：结构化那一半（人读那一半在 `renderBody` 的「复核对账」行）。
+        //   ⚠ 与渲染行**同源同一个 `s.review`** —— 不许两处各算（那会分叉）。
+        reviewEligible: s.review.eligible,
+        reviewReviewed: s.review.reviewed,
+        reviewUnreviewed: s.review.unreviewed,
+        reviewOrphan: s.review.orphanReviews,
+        reviewSelf: s.review.selfReviews,
+        reviewUnknownReviewer: s.review.unknownReviewer,
         // ★ 「这份读数说的是哪一刻」—— **机器可读的那一格**（与渲染行同源同一个值）
         asOfMs,
         timeout: s.byKind.timeout,

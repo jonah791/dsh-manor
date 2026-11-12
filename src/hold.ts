@@ -91,7 +91,7 @@ import type { ReapVerdict } from './reap.ts'
 import { normalizeTimeoutSpec, type TimeoutSpec } from './timeout.ts'
 // ★ 接力起点（2026-10-17 · 论文迁移）：hold 记录要存它 ⇒ 归一与类型都取自 `envelope.ts`
 //   （**单一真源** —— 两处各写一份归一，就会出现「一个字段两种形状」，契约漂移的经典形状）。
-import { normalizeBest, type BestSpec } from './envelope.ts'
+import { normalizeBest, normalizeVerifyOf, type BestSpec } from './envelope.ts'
 
 /**
  * 依赖活在**可观测世界**里的状态。
@@ -193,6 +193,16 @@ export interface HoldRecord {
    * ⚠ 空（`undefined`）**不写盘**（同 `nature` / `timeout` 纪律：记录不该带一个死键）。
    */
   best?: BestSpec
+  /**
+   * ★ **这条任务在复核谁**（原任务的 `taskId`；空 = 不是复核任务）—— 2026-11-12。
+   *
+   * 存在理由：**与 `nature` / `timeout` / `best` 同一条路**（`HoldSpec.verifyOf` → 本字段 →
+   *   `releaseHold` 传回 `buildEnvelope`）。hold 是信封的**第二条产出路**，不在这里存下来，
+   *   释放时那条复核任务就**丢了「它在复核谁」** ⇒ 台账把它读成普通任务 ⇒
+   *   目标永远显示「未复核」（**静默漏判**：系统看起来在工作，而复核关系已经断了）。
+   * ⚠ 空（`undefined`）**不写盘**（同 `nature` / `timeout` / `best` 纪律：记录不该带一个死键）。
+   */
+  verifyOf?: string
   cwd: string
   priority: Priority
   /** 等谁（taskId 列表）。指针，非状态 */
@@ -831,6 +841,12 @@ export interface HoldSpec {
    * ⚠ 类型取宽（`unknown`）：与 `timeout` 同理 —— hold 记录会被读回，类型不可信。
    */
   best?: unknown
+  /**
+   * ★ **这条任务在复核谁**（**可选** · 2026-11-12）。归一在 `envelope.ts` 的 `normalizeVerifyOf`
+   * （**单一真源**）：空 / 非 `t-` 前缀 ⇒ `null` ⇒ 本字段**不写**（同 `timeout` / `best` 纪律）。
+   * ⚠ 类型取宽（`unknown`）：与 `timeout` 同理 —— hold 记录会被读回，类型不可信。
+   */
+  verifyOf?: unknown
   cwd: string
   priority: Priority
   dependsOn: string[]
@@ -874,6 +890,8 @@ export function buildHoldRecord(spec: HoldSpec): HoldRecord {
   //   「没写」= 派活方没给起点；与 `nature` 不同 —— 那个归一成 `''` 也要写上，
   //   因为消费侧要判「声明的还是兜底的」）。
   const bestSpec = normalizeBest(spec.best)
+  // ★ 复核关系（2026-11-12）：与 `timeout` / `best` 同一条纪律 —— `null`（没给）⇒ **不写字段**。
+  const verifyOfRaw = normalizeVerifyOf(spec.verifyOf)
   return {
     v: HOLD_VERSION,
     taskId: spec.taskId,
@@ -890,6 +908,8 @@ export function buildHoldRecord(spec: HoldSpec): HoldRecord {
     // ★ 接力起点（2026-10-17 · 论文迁移）：与 `timeout` **同一条纪律** —— `null`（没给起点）
     //   ⇒ **不写字段**（记录不该带一个死键）。`bestSpec` 已由 `normalizeBest` 归一。
     ...(bestSpec === null ? {} : { best: bestSpec }),
+    // ★ 复核关系（2026-11-12）：与 `timeout` / `best` **同一条纪律** —— `null` ⇒ **不写字段**。
+    ...(verifyOfRaw === null ? {} : { verifyOf: verifyOfRaw }),
     cwd: spec.cwd,
     priority: spec.priority,
     dependsOn: [...spec.dependsOn],

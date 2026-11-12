@@ -96,6 +96,39 @@ export function normalizeVia(v: unknown): string | null {
 }
 
 /**
+ * 归一 `verifyOf` —— 「**这条任务在复核谁**」（原任务的 `taskId`）。**可选**：非空才写。
+ *
+ * ★ 存在理由（2026-11-12 · 对照 sapper-v2 / nvwabase 的 `verify` 角色后补的缺口）：
+ *   庄园的回执面只答「有没有交回证据」，**答不了「谁复核过它」** —— 而工具自己就在那一段写着
+ *   「收到回执 ≠ 交的东西满足了判据」「需要**另一份不是作者写的重建**」。
+ *   `refs` 补不上这一格：它是「结论凭什么」（过去的锚），而且**不折进台账**
+ *   （`grep refs task-ledger.ts` 为空）⇒ 台账里**根本看不到谁复核了谁**。
+ *   没有这一格，复核只能靠人记得派 ⇒ 与 `hold` 当初的处境同一个病：
+ *   「B 要复核 A」只能靠我记得 = **不是机制，是运气**。
+ *
+ * 语义（写死，别读宽）：
+ *   · 指向的 `taskId` **存在** ⇒ 那条活「被复核过」（**只到这一层**：复核结论是通过还是不通过，
+ *     在回执信封里，台账是纯函数读不到 —— 输出面必须把这条盲区写明，不许让读的人自己外推）；
+ *   · 指向的 `taskId` **不存在** ⇒ 孤儿，读侧**单独报出**（不静默丢弃，同 `manor_reap` 的孤儿裁决纪律）；
+ *   · 空 / 非字符串 / 非 `t-` 前缀 ⇒ `null` ⇒ **不写**（同 `refs`/`nature`/`timeout`/`via`/`best` 纪律）。
+ *
+ * ⚠ **必须是 `t-` 前缀**：`taskId` 前缀 `t-`、信封 `id` 前缀 `m-` 是庄园既有约定
+ *   （见 2026-10-07「裸 cluster_send 不够」实测）。不像 taskId 的指针**不救也不猜**
+ *   —— 救它比丢它更危险：它会静默指向错误的东西，而读侧无从发现。
+ */
+export const VERIFY_OF_MAX_LEN = 64
+
+export function normalizeVerifyOf(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const s = v.trim()
+  if (s === '') return null
+  // ⚠ 光有前缀（`t-`）不是指针，是**残缺**：`length <= 2` 一律拒 ——
+  //   放行它会让台账把「一个不存在的 id」当成合法目标，孤儿检测因此**永远不响**。
+  if (!s.startsWith('t-') || s.length <= 2) return null
+  return s.length > VERIFY_OF_MAX_LEN ? s.slice(0, VERIFY_OF_MAX_LEN) : s
+}
+
+/**
  * ★ **接力起点**（`best`）—— 论文迁移（arXiv:2610.20563 *Scaling Discovery Requires Forgetting*）。
  *
  * ★ 与 `refs` 的分工（**这是两个不同的东西，别合并**）：
@@ -237,6 +270,14 @@ export function buildEnvelope(i: {
    */
   via?: string
   /**
+   * ★ **这条任务在复核谁**（原任务的 `taskId`，见 `normalizeVerifyOf`）。**可选**：非空才写。
+   *
+   * 存在理由：台账的回执面只答「有没有交回证据」，**答不了「谁复核过它」**；而 `refs` 不折进台账
+   *   ⇒ 没有这一格，「B 要复核 A」只能靠人记得派 = 不是机制，是运气。
+   * ⚠ 与 `refs` / `nature` / `timeout` / `via` **同纪律：空不写**。
+   */
+  verifyOf?: unknown
+  /**
    * ★ **接力起点**（见 `normalizeBest` 头注）：当前最优产物 + 判据 + 分数。**可选**：非空才写。
    *
    * ⚠ 与 `refs` **不是一回事**：`refs` 答「结论凭什么」（过去的锚），`best` 答「现在做到哪了」
@@ -257,6 +298,11 @@ export function buildEnvelope(i: {
   //     而归一会把「我不认识的那条路」这个最该看见的信号抹成缺省值。
   const via = normalizeVia(i.via)
   if (via !== null) meta.via = via
+  // ★ `verifyOf`（2026-11-12）：非空才写（同 `refs` / `nature` / `timeout` / `via` 纪律）。
+  //   ⚠ **两条产出路都必须带上它** —— 否则就是 `nature` 那个教训的第四个实例
+  //     （hold 释放时丢声明 ⇒ 那条活按节点缺省跑，而派活方以为声明生效了）。
+  const verifyOf = normalizeVerifyOf(i.verifyOf)
+  if (verifyOf !== null) meta.verifyOf = verifyOf
   // ★ `best`（2026-10-17 · 论文迁移 arXiv:2610.20563）：非空才写（同 `refs`/`nature`/`timeout`/`via` 纪律）。
   //   ⚠ 归一在 `normalizeBest`：`at` 缺失/为空 ⇒ null ⇒ **整条不写**（不写半截 —— 一个只有
   //     `score` 没有 `at` 的 `best` 读不出用途）。两条产出路都必须带上它，否则就是

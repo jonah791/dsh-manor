@@ -722,6 +722,13 @@ function task(over: Partial<TaskRecord> & { taskId: string }): TaskRecord {
     reapVerdict: '',
     reapReason: '',
     reapAtMs: 0,
+    // ★ 复核关系（2026-11-12）：缺省 = 「不是复核任务 / 无人复核 / 不是自我复核」
+    //   —— 与生产侧一致（`foldTasks` 的 Bucket 初值）。
+    //   ⚠ 漏了它们，判据 `t.verifyOf === ''` 会因 `undefined !== ''` 判假
+    //   ⇒ **所有夹具都被当成复核任务**，分母塌成 0 而测试不会红。
+    verifyOf: '',
+    reviewedBy: '',
+    selfReview: false,
     ...over,
   }
 }

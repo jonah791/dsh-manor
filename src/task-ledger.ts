@@ -148,6 +148,39 @@ export interface TaskRecord {
   reapReason: string
   /** 裁决时刻（ms；0 = 未裁决） */
   reapAtMs: number
+  /**
+   * ★ **这条任务在复核谁**（原任务的 `taskId`；空串 = **不是复核任务**）。
+   *
+   * 来源：信封 `meta.verifyOf`（归一在 `envelope.ts` 的 `normalizeVerifyOf`）。
+   * 为什么必须进台账（2026-11-12）：回执面只答「有没有交回证据」，**答不了「谁复核过它」**；
+   *   而 `refs` 不折进台账（`refs` 只在信封里）⇒ 不折这一格，「谁复核了谁」在读数里
+   *   根本算不出来，复核只能靠人记得派 = 不是机制，是运气。
+   * ⚠ 空串 = 不是复核任务（不是「复核了空」）—— 同 `via` 的空串语义。
+   */
+  verifyOf: string
+  /**
+   * ★ **谁复核了它**（派生的反向索引；空串 = 无人复核）。
+   *
+   * ⚠ 本字段是**派生**的：在 `foldTasks` 末尾一次算出（`applyReviewIndex`），
+   *   不散落在消费侧 —— 各处各判会分叉（同 `nature` 的纪律）。
+   * ⚠ 只答「**有复核任务指向它且那个任务跑完了**」，**不答复核结论是通过还是不通过**
+   *   —— 结论在回执信封里，而台账是纯函数（零 IO）。输出面必须把这条盲区写明。
+   * ⚠ 同一目标被多次复核时取 `taskId` **字典序最小**的那个（可复现，不取 Map 迭代序）。
+   */
+  reviewedBy: string
+  /**
+   * ★ **这条复核属于「自己验自己」**（2026-11-12）。
+   *
+   * 判据（由 `applyReviewIndex` 设置，**单一真源**）：`verifyOf` 指向的任务与本任务的
+   *   **收件人相同**（`to` 相等且都非空）⇒ 同一个人验自己的活。
+   * ⚠ 为什么它**不计入已复核**：AGENTS.md §1.2 的硬线——「**验收不自己验自己**」。
+   *   自己验自己不是复核，是**自述**；把它算成「已复核」会让 `unreviewed` 这个数**说谎**，
+   *   而那正是这一整格存在的理由。
+   * ⚠ 为什么**不静默丢弃**：判据只认「收件人相同」这一种形态；`to` 为空（早期日志没记成员）
+   *   时**判不了** ⇒ 按正常复核处理（取宽），并在 `TaskSummary.review.unknownReviewer`
+   *   里报出「判不了的有几条」——「判不了」与「判过」是两件事。
+   */
+  selfReview: boolean
 }
 
 const asStr = (v: unknown, d: string): string => (typeof v === 'string' ? v : d)
@@ -227,6 +260,11 @@ export function classifyReject(humanText: string): RejectKind {
 interface Bucket {
   taskId: string
   actionId: string
+  /**
+   * 这个任务在复核谁（信封 `meta.verifyOf`；空串 = **不是复核任务**，同 `via` 的空串语义）。
+   * 挨着 `taskId` 放是因为它是一个**指针**（指向另一条任务）；`TaskRecord.verifyOf` 是它的投影。
+   */
+  verifyOf: string
   to: string
   from: string
   acceptance: string
@@ -324,6 +362,8 @@ export function foldTasks(
         natureDeclared: false,
         // 初值 = **空串 = 没盖章**（不是「走了空的那条路」）—— 读取侧只在拿到非空串时覆盖
         via: '',
+        // 初值 = **空串 = 不是复核任务**（不是「复核了空」）—— 读取侧只在拿到非空串时覆盖
+        verifyOf: '',
         // 初值 0 = **没记**（不是「刚刚」）—— 读取侧只在拿到正数时覆盖（见下）
         envelopeCreatedAtMs: 0,
         startedAtMs: 0,
@@ -360,6 +400,10 @@ export function foldTasks(
     //     （**枚举漏格的信号**）；一旦在这里归一，这个信号就被抹成缺省值、再也看不见。
     const viaRaw = ev.detail['via']
     if (typeof viaRaw === 'string' && viaRaw !== '') b.via = viaRaw
+    // 复核关系（`meta.verifyOf`）：**非空才覆盖**（同 `nature` / `via` 纪律）。
+    //   ⚠ 这里**不判「目标存不存在」**—— 那要看全表，折叠完才知道 ⇒ 留给 `applyReviewIndex`。
+    const vOfRaw = ev.detail['verifyOf']
+    if (typeof vOfRaw === 'string' && vOfRaw !== '') b.verifyOf = vOfRaw
     // 信封出生时刻（派活时刻）：**只在拿到正数时覆盖** —— 0 / 缺失 = 日志没记，
     //   保留初值 0（「没记」与「零延迟」是两件事，不许混）。
     const envAt = asNum(ev.detail['envelopeCreatedAtMs'], 0)
@@ -444,6 +488,9 @@ export function foldTasks(
       nature: b.nature,
       natureDeclared: b.natureDeclared,
       via: b.via,
+      verifyOf: b.verifyOf,
+      reviewedBy: '', // 派生字段：折叠完由 applyReviewIndex 统一算（此时只看到半张表，判不了）
+      selfReview: false, // 同上：派生（要看得到被复核那条的 to 才判得了）
       envelopeCreatedAtMs: b.envelopeCreatedAtMs,
       startedAtMs: b.startedAtMs,
       endedAtMs: b.endedAtMs,
@@ -461,7 +508,50 @@ export function foldTasks(
     })
   }
   out.sort((a, b) => b.startedAtMs - a.startedAtMs)
+  applyReviewIndex(out)
   return out
+}
+
+/**
+ * ★ **把复核关系折成反向索引**（填 `TaskRecord.reviewedBy`）—— 2026-11-12。
+ *
+ * 为什么独立成函数、而不散在消费侧：`reviewedBy` 依赖**全表**（要看所有复核任务才知道
+ *   某个目标被谁复核过）。放在折叠末尾算**一次**，所有调用点（`manor_tasks` /
+ *   `manor_task_watch` / `manor_find`）自动一致；各处各判会分叉 —— 同 `nature` 归一的纪律。
+ *
+ * 判据（写死，别读宽）：
+ *   · 只有 `verifyOf !== ''` **且** `outcome === 'done'` 的任务算一次**有效**复核
+ *     —— 复核任务失败 / 拒收 / 未完 ⇒ 那条活**仍然没人复核**（「派了」不等于「复核过了」，
+ *     同 `manor_tasks` 的回执面纪律：收到回执 ≠ 判据满足）；
+ *   · 同一目标被多次有效复核 ⇒ 取 `taskId` **字典序最小**的（可复现；不取 Map 迭代序，
+ *     那会让同一份日志在两次运行里报出不同的复核者）；
+ *   · `verifyOf` 指向不存在的任务 ⇒ **静默跳过**（孤儿由 `summarizeTasks` 单独报出；
+ *     这里不抛 —— 一行坏数据不该带塌整张台账，同 `parseActionLine` 纪律）。
+ *
+ * ⚠ 本函数只答「**有人复核过它**」，**不答**「复核结论是通过还是不通过」—— 后者在回执信封里，
+ *   台账是纯函数（零 IO）读不到。输出面必须把这条盲区写明，不许让读的人自己外推。
+ */
+export function applyReviewIndex(tasks: TaskRecord[]): void {
+  const byId = new Map<string, TaskRecord>()
+  for (const t of tasks) byId.set(t.taskId, t)
+  const valid = tasks
+    .filter((t) => t.verifyOf !== '' && t.outcome === 'done')
+    .sort((a, b) => (a.taskId < b.taskId ? -1 : a.taskId > b.taskId ? 1 : 0))
+  for (const r of valid) {
+    const target = byId.get(r.verifyOf)
+    if (target === undefined) continue
+    // ★ 自我复核判据（2026-11-12）：复核任务与被复核任务的**收件人相同** ⇒ 自己验自己
+    //   ⇒ **不计入已复核**（AGENTS.md §1.2 硬线「验收不自己验自己」），但**标记显形**
+    //   （`selfReview` + 汇总里单独报数）—— 不静默丢弃。
+    //   ⚠ 任一 `to` 为空（早期日志没记成员）⇒ **判不了** ⇒ 取宽按正常复核处理，
+    //     并在 `TaskSummary.review.unknownReviewer` 里报出「判不了的有几条」：
+    //     「判不了」与「判过」是两件事，不许混。
+    if (r.to !== '' && target.to !== '' && r.to === target.to) {
+      r.selfReview = true
+      continue
+    }
+    if (target.reviewedBy === '') target.reviewedBy = r.taskId
+  }
 }
 
 /** 单成员的计数。 */
@@ -778,6 +868,33 @@ export interface TaskSummary {
    * 排序确定性：count 降序 → member 字典序 → kind 字典序（同一份数据每次渲染同一顺序）。
    */
   failureClusters: FailureCluster[]
+  /**
+   * ★ **复核对账**（2026-11-12）—— 「哪些交付**还没人复核**」。
+   *
+   * 缺口原话（本文件的回执面）：那里只答「有没有交回证据」，**不答「判据满没满足」**
+   *   ——「后者需要**另一份不是作者写的重建**」。这一格就是那份重建的**索引**。
+   *
+   * ⚠ 四个数**不可互相替代**：
+   *   · `eligible`      —— 分母：`outcome === 'done'` **且自身不是复核任务**的条数；
+   *   · `reviewed`      —— 其中已被**有效复核**的（有另一条 `verifyOf` 指向它且那条 `done`）；
+   *   · `unreviewed`    —— 其中**无人复核**的（**这才是要盯的数**）；
+   *   · `orphanReviews` —— 复核任务指向的 `taskId` **不存在**（记录被删 / 写错）⇒ 单独报，不静默。
+   *
+   * ⚠ 分母规则（写死）：只算 `done` —— 未完 / 失败 / 拒收谈不上复核，它们该进
+   *   `unfinished` / 失败族，不是这里；**复核任务自身不进分母**（否则无限递归：
+   *   复核者的复核者永远没有）。
+   * ⚠ 本组**不答**「复核结论是通过还是不通过」—— 结论在回执信封里，台账读不到。
+   */
+  review: {
+    eligible: number
+    reviewed: number
+    unreviewed: number
+    orphanReviews: number
+    /** 判为「**自己验自己**」的复核任务条数（**不计入 `reviewed`**，但必须显形）。 */
+    selfReviews: number
+    /** 复核者或被复核者的收件人**判不了**（`to` 为空）的条数 —— 「判不了」≠「判过」。 */
+    unknownReviewer: number
+  }
 }
 
 /** 汇总台账。 */
@@ -855,6 +972,31 @@ export function summarizeTasks(tasks: TaskRecord[]): TaskSummary {
     }
   }
   const denom = done + failed
+  // ★ 复核对账（2026-11-12）：独立一趟算 —— 与 outcome 分支**无关**，
+  //   免得四处分头记账、迟早对不上（同 `natureUndeclared` / `reapVerdict` 的纪律）。
+  const allIds = new Set(tasks.map((t) => t.taskId))
+  const byTaskId = new Map(tasks.map((t) => [t.taskId, t] as const))
+  const eligibleTasks = tasks.filter((t) => t.outcome === 'done' && t.verifyOf === '')
+  const reviewedCount = eligibleTasks.filter((t) => t.reviewedBy !== '').length
+  const selfReviews = tasks.filter((t) => t.selfReview).length
+  // ★ 「判不了」单独一档（2026-11-12）：复核任务跑完了、也不是自我复核，但**收件人一侧为空**
+  //   （早期日志没记 `profile`）⇒ 这条复核到底是不是自己验自己，**结构上判不出来**。
+  //   取宽（算作有效复核）是代价较低的那一侧，但必须**把判不了的数报出来** —— 否则
+  //   「判不了」会在读数里消失，而它正是「判据与载体形态绑死」那类盲区。
+  const unknownReviewer = tasks.filter((t) => {
+    if (t.verifyOf === '' || t.outcome !== 'done' || t.selfReview) return false
+    if (t.to === '') return true
+    const target = byTaskId.get(t.verifyOf)
+    return target !== undefined && target.to === ''
+  }).length
+  const review = {
+    eligible: eligibleTasks.length,
+    reviewed: reviewedCount,
+    unreviewed: eligibleTasks.length - reviewedCount,
+    orphanReviews: tasks.filter((t) => t.verifyOf !== '' && !allIds.has(t.verifyOf)).length,
+    selfReviews,
+    unknownReviewer,
+  }
   const byMember = Array.from(members.values()).sort((a, b) => b.total - a.total)
   // 失败族构造（见 `FailureCluster` 头注）：排序**确定性**（count 降 → member 升 → kind 升），
   // 簇内 taskId 字典序，超出上限用 `more` 计数（**不静默截断**——截断必须显形）。
@@ -889,6 +1031,7 @@ export function summarizeTasks(tasks: TaskRecord[]): TaskSummary {
     byReject,
     byMember,
     failureClusters,
+    review,
   }
 }
 
@@ -1092,6 +1235,23 @@ function renderBody(s: TaskSummary, rows: TaskRecord[], maxRows: number, nowMs: 
       lines.push('派活→开始时延｜**问不出来**：没有任何一条记录同时带`信封出生时刻`与`开始时刻`'
         + '（不是「零延迟」—— 是这两格凑不齐）')
     }
+  }
+  // ★ **复核对账**（2026-11-12）—— 「哪些交付**还没人复核**」。
+  //   缺口原话（回执面那一行）：那里只答「有没有交回证据」，**不答「判据满没满足」**
+  //   ——「后者需要**另一份不是作者写的重建**」。这一行就是那份重建的**索引**。
+  //   ⚠ **始终出**（同 `nature` / 来路的纪律）：`unreviewed` 为 0 与非 0 是**相反的两句话**。
+  //   ⚠ 三个数**不合并**：自我复核 / 判不了 / 孤儿各有各的含义，并成一格就全糊了
+  //     （同 `reaped` 分两档、`viaUnknown` 与 `viaNone` 不合流那条纪律）。
+  {
+    const r = s.review
+    const bits: string[] = []
+    if (r.selfReviews > 0) bits.push('**自己验自己 ' + String(r.selfReviews) + ' 条**（不计入已复核）')
+    if (r.unknownReviewer > 0) bits.push('判不了 ' + String(r.unknownReviewer) + ' 条（收件人未记）')
+    if (r.orphanReviews > 0) bits.push('⚠ **孤儿 ' + String(r.orphanReviews) + ' 条**（指向不存在的 taskId）')
+    lines.push('复核对账｜**已复核 ' + String(r.reviewed) + ' · 未复核 ' + String(r.unreviewed)
+      + ' / ' + String(r.eligible) + ' 条**（分母 = 已完成、且自身不是复核任务）'
+      + (bits.length > 0 ? '｜' + bits.join(' · ') : '')
+      + '｜⚠ 只答「**有人复核过**」，**不答**「复核结论是否通过」—— 后者在回执信封里')
   }
   if (s.unfinished > 0) {
     // ★ **「未完」必须带上年龄，否则它会撒谎**（2026-10-12 实测）：一条「**刚 start 60 秒**」的活

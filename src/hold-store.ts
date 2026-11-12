@@ -248,6 +248,12 @@ export function releaseHold(
     //   ⇒ 接力者**知道证据在哪、却不知道当前最好的是什么** ⇒ 从零试错一遍。
     //   `hold.best` 已是归一后的 `BestSpec`（`buildHoldRecord` 归一）⇒ 这里原样传回。
     best: hold.best,
+    // ★ 复核关系（2026-11-12）：**同 `nature` / `timeout` / `best` 的教训** —— hold 是信封的
+    //   **第二条产出路**，不在这里带上，释放出去的复核任务就丢了「它在复核谁」
+    //   ⇒ 台账把它读成普通任务 ⇒ 目标永远显示「未复核」（**静默漏判**：
+    //   系统看起来在工作，而复核关系已经断了）。
+    //   `hold.verifyOf` 已在 `buildHoldRecord` 归一（空 / 非 `t-` 前缀 ⇒ 记录里没有该键 ⇒ 传 `undefined`）。
+    verifyOf: hold.verifyOf,
     // ★ 来路盖章（2026-10-15 · `G-provenance` Step B）：本函数是**第二条**产出路
     //   （hold 释放）。与 `manor_dispatch` 直投**必须可区分** —— 缺口要答的正是
     //   「这条 taskId 是被哪条路造出来的」；不盖章则两条路在读数里同貌。
